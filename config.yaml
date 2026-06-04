@@ -1,0 +1,63 @@
+# 竞品监测配置文件
+# 中小型公司真实爬虫方案 - 无需付费API工具
+
+monitoring:
+  report_period: "2025-05"          # 报告周期: YYYY-MM
+  output_dir: "./reports"           # 报告输出目录
+  data_dir: "./data"                # 原始数据存储目录
+  max_brands: 5                     # 最大监测品牌数
+  
+brands:
+  - name: "BrandA"                  # 品牌名称
+    website: "https://brand-a.com"  # 官网
+    social_accounts:
+      instagram: "brand_a"          # Instagram账号(不含@)
+      tiktok: "brand_a"             # TikTok账号(不含@)
+      facebook: "brand.a.official"  # Facebook主页名
+      youtube: "BrandAOfficial"     # YouTube频道ID或自定义URL
+      facebook_group: ""            # Facebook Group ID (可选)
+    product_keywords:               # 产品关键词用于搜索
+      - "BrandA Product X"
+      - "BrandA Pro"
+    
+  # 可添加更多品牌，最多5个
+  # - name: "BrandB"
+  #   website: "https://brand-b.com"
+  #   social_accounts:
+  #     instagram: "brand_b"
+  #     tiktok: "brand_b"
+  #     facebook: "brand.b"
+  #     youtube: "BrandB"
+  #   product_keywords:
+  #     - "BrandB Product"
+
+# Reddit API 配置 (免费, 需注册应用)
+# 注册地址: https://www.reddit.com/prefs/apps
+reddit:
+  client_id: "YOUR_REDDIT_CLIENT_ID"
+  client_secret: "YOUR_REDDIT_CLIENT_SECRET"
+  user_agent: "CompetitorMonitor/1.0 by YOUR_USERNAME"
+  
+# Google Custom Search API 配置 (用于PR监测, 免费额度100次/天)
+# 注册地址: https://developers.google.com/custom-search/v1/overview
+google:
+  api_key: "YOUR_GOOGLE_API_KEY"
+  cx: "YOUR_CUSTOM_SEARCH_ENGINE_ID"  # 自定义搜索引擎ID
+
+# Meta Ad Library 配置 (无需API Key, 公开接口)
+meta_ad_library:
+  access_token: ""                  # 可选: 如有Meta开发者账号可填写
+  country: "US"                     # 广告搜索国家
+  
+# 请求配置
+request:
+  timeout: 30                       # 请求超时(秒)
+  retry_times: 3                    # 重试次数
+  delay_between_requests: 2         # 请求间隔(秒)
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# 输出配置
+output:
+  format: "markdown"                # 报告格式: markdown
+  include_raw_data: true            # 是否包含原始数据附件
+  language: "zh"                    # 报告语言: zh/en
