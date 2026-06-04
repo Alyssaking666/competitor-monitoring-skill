@@ -1,299 +1,493 @@
 """
-Instagram 爬虫
-通过公开网页抓取品牌账号数据
-注意：Instagram有反爬机制，需要控制请求频率
+Instagram 爬虫 v2.0
+通过Apify Actor抓取：Profile + Posts + Tagged区
+修复v1.0 _sharedData失效问题
 """
-
+import time
+import re
 import requests
 import json
-import re
-import time
+import logging
 from typing import Dict, List, Optional
 from datetime import datetime
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class InstagramScraper:
-    """Instagram公开数据爬虫"""
-    
-    BASE_URL = "https://www.instagram.com"
-    
-    def __init__(self, delay: int = 3):
-        self.delay = delay
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-        })
-    
-    def get_profile_info(self, username: str) -> Optional[Dict]:
+    """Instagram数据采集 - 基于Apify Actor"""
+
+    def __init__(self, apify_client, config: Dict = None):
         """
-        获取账号基本信息
-        
         Args:
-            username: Instagram账号名（不含@）
-            
-        Returns:
-            账号信息字典
+            apify_client: ApifyClient实例
+            config: 采集配置
         """
-        url = f"{self.BASE_URL}/{username}/"
-        
-        try:
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-            
-            # 从页面中提取sharedData
-            html = response.text
-            
-            # 查找用户数据
-            user_data = self._extract_user_data(html)
-            
-            if not user_data:
-                logger.error(f"无法获取用户 {username} 的数据")
-                return None
-            
-            profile = {
-                'username': username,
-                'full_name': user_data.get('full_name', ''),
-                'biography': user_data.get('biography', ''),
-                'followers': user_data.get('edge_followed_by', {}).get('count', 0),
-                'following': user_data.get('edge_follow', {}).get('count', 0),
-                'posts_count': user_data.get('edge_owner_to_timeline_media', {}).get('count', 0),
-                'is_verified': user_data.get('is_verified', False),
-                'profile_pic_url': user_data.get('profile_pic_url', ''),
-                'external_url': user_data.get('external_url', '')
-            }
-            
-            logger.info(f"获取到 {username} 的信息: {profile['followers']} 粉丝")
-            return profile
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"获取 {username} 信息失败: {e}")
+        self.client = apify_client
+        self.config = config or {}
+        self.max_posts = self.config.get('max_posts_per_profile', 60)
+        self.max_tagged = self.config.get('max_tagged_posts', 100)
+
+    def get_profile(self, username: str) -> Optional[Dict]:
+        """
+        获取Instagram账号信息
+
+        使用Actor: apify/instagram-profile-scraper
+        输入: usernames列表
+        输出: profile信息 + 最近12条帖子概要
+        """
+        logger.info(f"[IG Profile] 采集: @{username}")
+
+        run_input = {
+            "usernames": [username],
+        }
+
+        results = self.client.run_actor(
+            actor_id="apify/instagram-profile-scraper",
+            run_input=run_input,
+            timeout=120
+        )
+
+        if not results:
+            logger.warning(f"[IG Profile] Apify无结果，尝试网页抓取降级...")
+            profile = self._get_profile_fallback(username)
+            if profile:
+                return profile
+            logger.error(f"[IG Profile] 采集失败: @{username}")
             return None
-    
-    def get_recent_posts(self, username: str, count: int = 30) -> List[Dict]:
+
+        profile = results[0] if results else None
+        if profile:
+            logger.info(f"[IG Profile] ✅ @{username}: {profile.get('followersCount', 'N/A')} 粉丝, {profile.get('postsCount', 'N/A')} 帖子")
+
+        return profile
+
+    def get_posts(self, username: str, max_posts: int = None) -> List[Dict]:
         """
-        获取最近发布的帖子
-        
-        Args:
-            username: Instagram账号名
-            count: 获取帖子数量
-            
-        Returns:
-            帖子列表
+        获取Instagram帖子详情
+
+        使用Actor: apify/instagram-post-scraper
+        输入: usernames + maxPosts
+        输出: 帖子详情列表(含caption, likes, comments, mentions, tagged users等)
+        """
+        max_posts = max_posts or self.max_posts
+        logger.info(f"[IG Posts] 采集: @{username}, 最多{max_posts}条")
+
+        run_input = {
+            "usernames": [username],
+            "maxPosts": max_posts,
+        }
+
+        results = self.client.run_actor(
+            actor_id="apify/instagram-post-scraper",
+            run_input=run_input,
+            timeout=300
+        )
+
+        if not results:
+            logger.warning(f"[IG Posts] Apify无结果，尝试网页抓取降级...")
+            results = self._get_posts_fallback(username, max_posts)
+
+        if not results:
+            logger.warning(f"[IG Posts] 无结果: @{username}")
+            return []
+
+        logger.info(f"[IG Posts] ✅ @{username}: {len(results)} 条帖子")
+        return results
+
+    def get_tagged_posts(self, username: str, max_posts: int = None) -> List[Dict]:
+        """
+        获取Tagged区帖子（别人tag了该品牌的帖子）
+        ★ 这是红人识别的核心数据源 ★
+
+        使用Actor: scrapio/instagram-tagged-mentions-posts-scraper
+        输入: urlsOrKeywords=[username]
+        输出: tagged帖子列表，含owner信息、is_paid_partnership、is_ad等
+        """
+        max_posts = max_posts or self.max_tagged
+        logger.info(f"[IG Tagged] 采集: @{username} 的tag区, 最多{max_posts}条")
+
+        run_input = {
+            "urlsOrKeywords": [username],
+            "proxyConfiguration": {
+                "useApifyProxy": True
+            }
+        }
+
+        results = self.client.run_actor(
+            actor_id="scrapio/instagram-tagged-mentions-posts-scraper",
+            run_input=run_input,
+            timeout=300
+        )
+
+        if not results:
+            logger.warning(f"[IG Tagged] 无结果: @{username}")
+            return []
+
+        # 结果可能是嵌套结构（metadata + posts）
+        tagged_posts = []
+        for item in results:
+            if 'posts' in item:
+                tagged_posts.extend(item['posts'])
+            else:
+                tagged_posts.append(item)
+
+        logger.info(f"[IG Tagged] ✅ @{username}: {len(tagged_posts)} 条tagged帖子")
+        return tagged_posts[:max_posts]
+
+    def _get_profile_fallback(self, username: str) -> Optional[Dict]:
+        """
+        Instagram Profile网页抓取降级方案
+
+        尝试从Instagram页面HTML中提取sharedData
+        注意：Instagram可能要求登录，此方法可能不稳定
+        """
+        try:
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            })
+
+            url = f"https://www.instagram.com/{username}/"
+            resp = session.get(url, timeout=15, allow_redirects=True)
+
+            if resp.status_code != 200:
+                logger.warning(f"[IG Profile Fallback] HTTP {resp.status_code}")
+                return None
+
+            html = resp.text
+
+            # 尝试提取 window._sharedData
+            shared_data_match = re.search(
+                r'window\._sharedData\s*=\s*({.+?})\s*;</script>',
+                html, re.DOTALL
+            )
+
+            if shared_data_match:
+                try:
+                    shared_data = json.loads(shared_data_match.group(1))
+                    user_data = (shared_data
+                                 .get('entry_data', {})
+                                 .get('ProfilePage', [{}])[0]
+                                 .get('graphql', {})
+                                 .get('user', {}))
+
+                    if user_data:
+                        profile = {
+                            'username': user_data.get('username', username),
+                            'fullName': user_data.get('full_name', ''),
+                            'biography': user_data.get('biography', ''),
+                            'followersCount': user_data.get('edge_followed_by', {}).get('count', 0),
+                            'followsCount': user_data.get('edge_follow', {}).get('count', 0),
+                            'postsCount': user_data.get('edge_owner_to_timeline_media', {}).get('count', 0),
+                            'profilePicUrl': user_data.get('profile_pic_url', ''),
+                            'isVerified': user_data.get('is_verified', False),
+                            'isPrivate': user_data.get('is_private', False),
+                            'externalUrl': user_data.get('external_url', ''),
+                            'source': 'ig_web_fallback'
+                        }
+                        logger.info(f"[IG Profile Fallback] ✅ @{username}: {profile['followersCount']} 粉丝")
+                        return profile
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"[IG Profile Fallback] sharedData解析失败: {e}")
+
+            # 尝试从 ld+json 提取基本信息
+            ld_match = re.search(
+                r'<script type="application/ld\+json">({.+?})</script>',
+                html, re.DOTALL
+            )
+            if ld_match:
+                try:
+                    ld_data = json.loads(ld_match.group(1))
+                    if ld_data.get('@type') == 'ProfilePage':
+                        profile = {
+                            'username': username,
+                            'fullName': ld_data.get('name', ''),
+                            'biography': ld_data.get('description', ''),
+                            'followersCount': 0,
+                            'followsCount': 0,
+                            'postsCount': 0,
+                            'profilePicUrl': ld_data.get('image', {}).get('contentUrl', ''),
+                            'isVerified': False,
+                            'isPrivate': False,
+                            'externalUrl': ld_data.get('url', ''),
+                            'source': 'ig_ldjson_fallback'
+                        }
+                        logger.info(f"[IG Profile Fallback] ✅ @{username} (ld+json, 粉丝数不可用)")
+                        return profile
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"[IG Profile Fallback] ld+json解析失败: {e}")
+
+            logger.warning(f"[IG Profile Fallback] 无法从页面提取数据: @{username}")
+            return None
+
+        except Exception as e:
+            logger.error(f"[IG Profile Fallback] 降级方案失败: {e}")
+            return None
+
+    def _get_posts_fallback(self, username: str, max_posts: int = 20) -> List[Dict]:
+        """
+        Instagram Posts网页抓取降级方案
+
+        尝试从Instagram页面HTML中提取帖子信息
         """
         posts = []
-        
-        # 首先获取用户页面
-        url = f"{self.BASE_URL}/{username}/"
-        
         try:
-            response = self.session.get(url, timeout=30)
-            html = response.text
-            
-            # 提取用户ID和初始帖子数据
-            user_data = self._extract_user_data(html)
-            
-            if not user_data:
-                return posts
-            
-            user_id = user_data.get('id')
-            
-            # 从初始数据中提取帖子
-            media_edges = user_data.get('edge_owner_to_timeline_media', {}).get('edges', [])
-            
-            for edge in media_edges[:count]:
-                node = edge.get('node', {})
-                post = self._parse_post_node(node)
-                if post:
-                    posts.append(post)
-            
-            logger.info(f"获取到 {username} 的 {len(posts)} 条帖子")
-            return posts
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"获取 {username} 帖子失败: {e}")
-            return posts
-    
-    def get_tagged_users(self, username: str, count: int = 50) -> List[Dict]:
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            })
+
+            url = f"https://www.instagram.com/{username}/"
+            resp = session.get(url, timeout=15, allow_redirects=True)
+
+            if resp.status_code != 200:
+                logger.warning(f"[IG Posts Fallback] HTTP {resp.status_code}")
+                return []
+
+            html = resp.text
+
+            # 尝试提取 window._sharedData 中的帖子
+            shared_data_match = re.search(
+                r'window\._sharedData\s*=\s*({.+?})\s*;</script>',
+                html, re.DOTALL
+            )
+
+            if shared_data_match:
+                try:
+                    shared_data = json.loads(shared_data_match.group(1))
+                    edges = (shared_data
+                             .get('entry_data', {})
+                             .get('ProfilePage', [{}])[0]
+                             .get('graphql', {})
+                             .get('user', {})
+                             .get('edge_owner_to_timeline_media', {})
+                             .get('edges', []))
+
+                    for edge in edges[:max_posts]:
+                        node = edge.get('node', {})
+                        posts.append({
+                            'id': node.get('id', ''),
+                            'shortCode': node.get('shortcode', ''),
+                            'caption': (node.get('edge_media_to_caption', {})
+                                        .get('edges', [{}])[0]
+                                        .get('node', {})
+                                        .get('text', '')),
+                            'likesCount': node.get('edge_media_preview_like', {}).get('count', 0),
+                            'commentsCount': node.get('edge_media_to_comment', {}).get('count', 0),
+                            'timestamp': str(node.get('taken_at_timestamp', '')),
+                            'type': 'Video' if node.get('is_video', False) else 'Image',
+                            'displayUrl': node.get('display_url', ''),
+                            'url': f"https://www.instagram.com/p/{node.get('shortcode', '')}/",
+                            'source': 'ig_web_fallback'
+                        })
+
+                    if posts:
+                        logger.info(f"[IG Posts Fallback] ✅ @{username}: {len(posts)} 条帖子")
+                        return posts
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"[IG Posts Fallback] sharedData解析失败: {e}")
+
+            logger.warning(f"[IG Posts Fallback] 无法从页面提取帖子: @{username}")
+            return []
+
+        except Exception as e:
+            logger.error(f"[IG Posts Fallback] 降级方案失败: {e}")
+            return []
+
+    def analyze_posts(self, posts: List[Dict], period_start: str, period_end: str) -> Dict:
         """
-        获取品牌账号tag区域出现的账号（合作红人）
-        
+        分析帖子数据，筛选监测周期内的帖子
+
         Args:
-            username: Instagram账号名
-            count: 获取数量
-            
-        Returns:
-            被标记的账号列表
-        """
-        tagged_users = []
-        
-        try:
-            # 访问tagged页面
-            url = f"{self.BASE_URL}/{username}/tagged/"
-            response = self.session.get(url, timeout=30)
-            html = response.text
-            
-            # 提取被标记的帖子
-            user_data = self._extract_user_data(html)
-            
-            if not user_data:
-                return tagged_users
-            
-            # 从被标记的帖子中提取用户信息
-            # 注意：这里需要访问具体的帖子来获取标记信息
-            # 简化实现：从帖子描述中提取@提及
-            
-            posts = self.get_recent_posts(username, count)
-            
-            mentioned_users = set()
-            for post in posts:
-                caption = post.get('caption', '')
-                mentions = re.findall(r'@(\w+)', caption)
-                mentioned_users.update(mentions)
-            
-            # 过滤掉品牌自己的账号
-            mentioned_users.discard(username)
-            
-            # 获取提及用户的基本信息
-            for mentioned in list(mentioned_users)[:count]:
-                user_info = self.get_profile_info(mentioned)
-                if user_info:
-                    tagged_users.append({
-                        'username': mentioned,
-                        'full_name': user_info.get('full_name', ''),
-                        'followers': user_info.get('followers', 0),
-                        'is_verified': user_info.get('is_verified', False)
-                    })
-                time.sleep(self.delay)
-            
-            logger.info(f"获取到 {len(tagged_users)} 个合作红人账号")
-            return tagged_users
-            
-        except Exception as e:
-            logger.error(f"获取tagged users失败: {e}")
-            return tagged_users
-    
-    def _extract_user_data(self, html: str) -> Optional[Dict]:
-        """从HTML中提取用户数据"""
-        try:
-            # 方法1: 查找sharedData
-            match = re.search(r'window\._sharedData\s*=\s*({.+?});</script>', html)
-            if match:
-                data = json.loads(match.group(1))
-                user_data = data.get('entry_data', {}).get('ProfilePage', [{}])[0].get('graphql', {}).get('user', {})
-                return user_data
-            
-            # 方法2: 查找额外的数据
-            match = re.search(r'"user":\s*({"biography".+?})', html)
-            if match:
-                # 需要更精确的匹配
-                pass
-            
-            return None
-            
-        except (json.JSONDecodeError, IndexError) as e:
-            logger.error(f"解析用户数据失败: {e}")
-            return None
-    
-    def _parse_post_node(self, node: Dict) -> Optional[Dict]:
-        """解析帖子节点"""
-        try:
-            post = {
-                'id': node.get('id', ''),
-                'shortcode': node.get('shortcode', ''),
-                'url': f"https://www.instagram.com/p/{node.get('shortcode', '')}/",
-                'timestamp': node.get('taken_at_timestamp', 0),
-                'likes': node.get('edge_liked_by', {}).get('count', 0),
-                'comments': node.get('edge_media_to_comment', {}).get('count', 0),
-                'caption': '',
-                'is_video': node.get('is_video', False),
-                'video_views': node.get('video_view_count', 0) if node.get('is_video') else 0,
-                'media_url': node.get('display_url', ''),
-            }
-            
-            # 提取caption
-            edge_media_to_caption = node.get('edge_media_to_caption', {}).get('edges', [])
-            if edge_media_to_caption:
-                post['caption'] = edge_media_to_caption[0].get('node', {}).get('text', '')
-            
-            # 计算互动率（简化）
-            # 实际互动率需要粉丝数，这里先记录原始数据
-            post['engagement'] = post['likes'] + post['comments']
-            
-            return post
-            
-        except Exception as e:
-            logger.error(f"解析帖子失败: {e}")
-            return None
-    
-    def analyze_posts(self, posts: List[Dict]) -> Dict:
-        """
-        分析帖子数据
-        
-        Returns:
-            分析结果
+            posts: 帖子列表
+            period_start: 周期开始 YYYY-MM-DD
+            period_end: 周期结束 YYYY-MM-DD
         """
         if not posts:
             return {
                 'total_posts': 0,
+                'period_posts': [],
                 'avg_likes': 0,
                 'avg_comments': 0,
-                'avg_engagement': 0,
                 'video_posts': 0,
                 'image_posts': 0,
                 'top_posts': [],
-                'posting_frequency': 0
+                'posting_frequency': 0,
+                'content_types': {}
             }
-        
-        total_posts = len(posts)
-        total_likes = sum(p['likes'] for p in posts)
-        total_comments = sum(p['comments'] for p in posts)
-        total_engagement = sum(p['engagement'] for p in posts)
-        
-        video_posts = sum(1 for p in posts if p['is_video'])
-        
-        # 排序获取高互动帖子
-        sorted_posts = sorted(posts, key=lambda x: x['engagement'], reverse=True)
+
+        # 筛选周期内帖子
+        period_posts = []
+        for post in posts:
+            timestamp = post.get('timestamp', '')
+            if not timestamp:
+                continue
+            try:
+                post_date = timestamp[:10] if len(timestamp) >= 10 else ''
+                if period_start <= post_date <= period_end:
+                    period_posts.append(post)
+            except:
+                # 保留无法判断日期的帖子
+                period_posts.append(post)
+
+        total = len(period_posts)
+        if total == 0:
+            return {
+                'total_posts': len(posts),
+                'period_posts': [],
+                'avg_likes': 0,
+                'avg_comments': 0,
+                'video_posts': 0,
+                'image_posts': 0,
+                'top_posts': [],
+                'posting_frequency': 0,
+                'content_types': {}
+            }
+
+        # 统计
+        total_likes = sum(p.get('likesCount', p.get('likes', 0)) for p in period_posts)
+        total_comments = sum(p.get('commentsCount', p.get('comments', 0)) for p in period_posts)
+
+        video_posts = sum(1 for p in period_posts if p.get('type') in ('Video', 'Reel', 'IGTV'))
+        image_posts = sum(1 for p in period_posts if p.get('type') in ('Image', 'Sidecar'))
+
+        # 内容类型分布
+        content_types = {}
+        for p in period_posts:
+            ptype = p.get('type', 'Unknown')
+            content_types[ptype] = content_types.get(ptype, 0) + 1
+
+        # 高互动帖子Top 10
+        sorted_posts = sorted(period_posts,
+                             key=lambda x: x.get('likesCount', x.get('likes', 0)) + x.get('commentsCount', x.get('comments', 0)),
+                             reverse=True)
         top_posts = sorted_posts[:10]
-        
-        # 计算发布频次（如果有时间数据）
-        posting_frequency = 0
-        if posts and posts[0].get('timestamp'):
-            timestamps = [p['timestamp'] for p in posts if p.get('timestamp')]
-            if len(timestamps) > 1:
-                time_span = max(timestamps) - min(timestamps)
-                days = time_span / (24 * 3600)
-                posting_frequency = len(timestamps) / max(days, 1)
-        
+
+        # 发布频次
+        posting_frequency = round(total / 30, 2)  # 简化：按30天算
+
         return {
-            'total_posts': total_posts,
-            'avg_likes': total_likes // total_posts,
-            'avg_comments': total_comments // total_posts,
-            'avg_engagement': total_engagement // total_posts,
+            'total_posts': len(posts),
+            'period_posts_count': total,
+            'period_posts': period_posts,
+            'avg_likes': total_likes // max(total, 1),
+            'avg_comments': total_comments // max(total, 1),
             'video_posts': video_posts,
-            'image_posts': total_posts - video_posts,
+            'image_posts': image_posts,
             'top_posts': top_posts,
-            'posting_frequency': round(posting_frequency, 2)
+            'posting_frequency': posting_frequency,
+            'content_types': content_types
         }
 
+    def identify_influencers(self, tagged_posts: List[Dict], brand_username: str) -> Dict:
+        """
+        从Tagged区帖子中识别合作红人
 
-if __name__ == "__main__":
-    # 测试
-    scraper = InstagramScraper()
-    
-    # 获取账号信息
-    profile = scraper.get_profile_info("nike")
-    if profile:
-        print(json.dumps(profile, indent=2, ensure_ascii=False))
-    
-    # 获取最近帖子
-    posts = scraper.get_recent_posts("nike", 10)
-    analysis = scraper.analyze_posts(posts)
-    print(json.dumps(analysis, indent=2, ensure_ascii=False))
+        关键逻辑：tagged_posts中每条帖子的owner就是tag了品牌的人
+        这才是需求里说的"看品牌tag区域识别合作红人"
+
+        Args:
+            tagged_posts: Tagged区帖子列表
+            brand_username: 品牌自己的IG账号（排除品牌自己）
+        """
+        if not tagged_posts:
+            return {
+                'total_influencers': 0,
+                'total_exposure': 0,
+                'platform_distribution': {},
+                'tier_distribution': {},
+                'influencer_list': [],
+                'top_tagged_posts': []
+            }
+
+        # 量级划分
+        def get_tier(followers):
+            if followers < 1000:
+                return 'Nano'
+            elif followers < 100000:
+                return 'Micro'
+            elif followers < 1000000:
+                return 'Macro'
+            else:
+                return 'Mega'
+
+        # 提取红人信息
+        influencer_map = {}  # username -> info
+        tier_distribution = {}
+        total_exposure = 0
+        analyzed_posts = []
+
+        for post in tagged_posts:
+            owner = post.get('owner', {})
+            username = owner.get('username', '')
+            if not username or username.lower() == brand_username.lower():
+                continue  # 排除品牌自己的帖子
+
+            followers = owner.get('edge_followed_by', {}).get('count',
+                         owner.get('followersCount',
+                         owner.get('followers', 0)))
+            tier = get_tier(followers)
+
+            # 判断合作类型
+            is_paid = post.get('is_paid_partnership', False)
+            is_ad = post.get('is_ad', False)
+            is_affiliate = post.get('is_affiliate', False)
+
+            if username not in influencer_map:
+                influencer_map[username] = {
+                    'username': username,
+                    'full_name': owner.get('full_name', ''),
+                    'followers': followers,
+                    'tier': tier,
+                    'is_verified': owner.get('is_verified', False),
+                    'platform': 'Instagram',
+                    'collab_type': 'paid' if is_paid else ('ad' if is_ad else ('affiliate' if is_affiliate else 'organic')),
+                    'posts': [],
+                    'total_engagement': 0
+                }
+                tier_distribution[tier] = tier_distribution.get(tier, 0) + 1
+                total_exposure += followers
+
+            # 关联帖子
+            engagement = (post.get('like_count', post.get('likesCount', 0)) +
+                         post.get('comment_count', post.get('commentsCount', 0)))
+            influencer_map[username]['posts'].append({
+                'short_code': post.get('short_code', post.get('shortCode', '')),
+                'caption': (post.get('caption', '') or '')[:200],
+                'likes': post.get('like_count', post.get('likesCount', 0)),
+                'comments': post.get('comment_count', post.get('commentsCount', 0)),
+                'views': post.get('video_view_count', post.get('videoViewCount', 0)),
+                'is_paid_partnership': is_paid,
+                'url': f"https://www.instagram.com/p/{post.get('short_code', post.get('shortCode', ''))}/"
+            })
+            influencer_map[username]['total_engagement'] += engagement
+
+            analyzed_posts.append({
+                'username': username,
+                'tier': tier,
+                'engagement': engagement,
+                'caption': (post.get('caption', '') or '')[:100],
+                'is_paid_partnership': is_paid,
+                'url': f"https://www.instagram.com/p/{post.get('short_code', post.get('shortCode', ''))}/"
+            })
+
+        # 排序
+        influencer_list = sorted(influencer_map.values(),
+                                key=lambda x: x['total_engagement'],
+                                reverse=True)
+
+        # 高互动tagged帖子
+        top_tagged = sorted(analyzed_posts, key=lambda x: x['engagement'], reverse=True)[:10]
+
+        return {
+            'total_influencers': len(influencer_map),
+            'total_exposure': total_exposure,
+            'platform_distribution': {'Instagram': len(influencer_map)},
+            'tier_distribution': tier_distribution,
+            'influencer_list': influencer_list,
+            'top_tagged_posts': top_tagged
+        }

@@ -1,63 +1,81 @@
-# 竞品监测配置文件
-# 中小型公司真实爬虫方案 - 无需付费API工具
+# 竞品监测配置文件 v2.0 - NativePet专用
+# Apify真实爬虫方案 - 低成本可落地
 
 monitoring:
-  report_period: "2025-05"          # 报告周期: YYYY-MM
+  report_period: "2026-06"          # 报告周期: YYYY-MM
   output_dir: "./reports"           # 报告输出目录
   data_dir: "./data"                # 原始数据存储目录
   max_brands: 5                     # 最大监测品牌数
-  
+  language: "zh"                    # 报告语言: zh/en
+
 brands:
-  - name: "BrandA"                  # 品牌名称
-    website: "https://brand-a.com"  # 官网
+  - name: "NativePet"
+    website: "https://nativepet.com/"
     social_accounts:
-      instagram: "brand_a"          # Instagram账号(不含@)
-      tiktok: "brand_a"             # TikTok账号(不含@)
-      facebook: "brand.a.official"  # Facebook主页名
-      youtube: "BrandAOfficial"     # YouTube频道ID或自定义URL
-      facebook_group: ""            # Facebook Group ID (可选)
-    product_keywords:               # 产品关键词用于搜索
-      - "BrandA Product X"
-      - "BrandA Pro"
-    
-  # 可添加更多品牌，最多5个
-  # - name: "BrandB"
-  #   website: "https://brand-b.com"
-  #   social_accounts:
-  #     instagram: "brand_b"
-  #     tiktok: "brand_b"
-  #     facebook: "brand.b"
-  #     youtube: "BrandB"
-  #   product_keywords:
-  #     - "BrandB Product"
+      instagram: "nativepet"          # Instagram账号(不含@)
+      tiktok: "nativepet"             # TikTok账号(不含@)
+      facebook: "nativepet"           # Facebook主页名
+      youtube: "@nativepet"           # YouTube频道
+    facebook_page_url: "https://www.facebook.com/nativepet/"  # 用于Meta广告按Page抓取
+    product_keywords:
+      - "Native Pet"
+      - "NativePet"
+      - "NativePet Daily"
+      - "NativePet Probiotic"
+      - "NativePet Omega Oil"
+      - "NativePet Hip Joint"
+      - "NativePet Allergy"
+      - "NativePet Pumpkin"
+      - "NativePet Calm"
+      - "NativePet Bone Broth"
+    reddit_subreddits:               # 垂类subreddit(可选)
+      - "dogs"
+      - "DogSupplies"
+      - "pethealth"
+      - "dogcare"
+      - "puppy101"
 
-# Reddit API 配置 (免费, 需注册应用)
-# 注册地址: https://www.reddit.com/prefs/apps
-reddit:
-  client_id: "YOUR_REDDIT_CLIENT_ID"
-  client_secret: "YOUR_REDDIT_CLIENT_SECRET"
-  user_agent: "CompetitorMonitor/1.0 by YOUR_USERNAME"
-  
-# Google Custom Search API 配置 (用于PR监测, 免费额度100次/天)
-# 注册地址: https://developers.google.com/custom-search/v1/overview
-google:
-  api_key: "YOUR_GOOGLE_API_KEY"
-  cx: "YOUR_CUSTOM_SEARCH_ENGINE_ID"  # 自定义搜索引擎ID
+# Apify配置 (核心)
+apify:
+  api_token: "${APIFY_API_TOKEN}"   # 环境变量读取
+  # Actor配置
+  actors:
+    instagram_profile: "apify/instagram-profile-scraper"
+    instagram_posts: "apify/instagram-post-scraper"
+    instagram_tagged: "scrapio/instagram-tagged-mentions-posts-scraper"
+    instagram_comments: "apify/instagram-comment-scraper"
+    tiktok_profile: "apify/tiktok-profile-scraper"
+    youtube_scraper: "streamers/youtube-scraper"
+    facebook_ads: "automation-lab/facebook-ads-library"
+  # 采集参数
+  max_posts_per_profile: 60         # 每个账号最多采集帖子数
+  max_tagged_posts: 100             # Tagged区最多采集数
+  max_ads_per_search: 100           # 每次广告搜索最多条数
+  actor_timeout: 300                # Actor超时(秒)
+  actor_poll_interval: 10           # Actor状态轮询间隔(秒)
 
-# Meta Ad Library 配置 (无需API Key, 公开接口)
-meta_ad_library:
-  access_token: ""                  # 可选: 如有Meta开发者账号可填写
-  country: "US"                     # 广告搜索国家
-  
 # 请求配置
 request:
-  timeout: 30                       # 请求超时(秒)
-  retry_times: 3                    # 重试次数
-  delay_between_requests: 2         # 请求间隔(秒)
+  timeout: 30
+  retry_times: 2
+  delay_between_requests: 2
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 # 输出配置
 output:
   format: "markdown"                # 报告格式: markdown
-  include_raw_data: true            # 是否包含原始数据附件
-  language: "zh"                    # 报告语言: zh/en
+  include_raw_data: true            # 是否保存原始数据JSON
+  include_cost_breakdown: true      # 是否包含成本明细
+  language: "zh"                    # 报告语言
+
+# 降级模式开关
+fallback:
+  use_search_fallback: true         # Apify失败时是否用搜索降级
+  search_engine: "google"           # 搜索引擎: google/bing
+
+# LLM分析配置
+llm:
+  content_classification: true      # 内容方向分类
+  sentiment_analysis: true          # 情感分析
+  selling_point_extraction: true    # 卖点提取
+  script_analysis: true             # 视频脚本拆解

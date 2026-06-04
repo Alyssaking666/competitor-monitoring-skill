@@ -1,31 +1,35 @@
 ---
 name: competitor-monitoring
-version: "1.0"
-description: 竞品全维度监测Skill，支持品牌新品动向、社媒数据、红人合作、UGC舆情、PR稿件、Meta广告等六大板块监测。输出结构化月度监测报告至飞书文档。Invoke when user needs to monitor competitor brand activities, social media performance, influencer campaigns, or advertising strategies.
+version: "2.0"
+description: 竞品全维度监测Skill v2.0，基于Apify真实爬虫架构，覆盖品牌新品、社媒数据(IG/TK/YT/FB)、红人合作(tag区识别)、UGC舆情、PR稿件、Meta广告六大板块。每月1号出上月报告。Invoke when user needs to monitor competitor brand activities, social media performance, influencer campaigns, advertising strategies, or generate monthly competitor reports.
 ---
 
-# 竞品监测 Skill v1.0
+# 竞品监测 Skill v2.0
 
 ## 1. Skill 概述
 
-本Skill用于执行竞品品牌的全维度监测，覆盖6大核心板块，输出结构化的月度监测报告至飞书文档。
+本Skill用于执行竞品品牌的全维度监测，基于Apify真实爬虫+免费搜索API架构，覆盖6大核心板块，输出结构化的月度监测报告。
 
-### 1.1 监测维度
+### 1.1 核心原则
+- **真实爬虫**：所有社媒数据通过Apify Actor抓取，不依赖similarweb/modash等第三方分析工具
+- **低成本可落地**：~$5-10/品牌/月，中小型公司可用
+- **LLM增强分析**：利用Coze内置LLM做内容分类、情感分析、脚本拆解等深度分析
 
-| 板块 | 监测内容 | 数据源/API |
-|------|---------|-----------|
-| **品牌新品动向** | 新品上线时间、主推卖点、近期主推产品 | 品牌官网、官方社媒账号 |
-| **社媒数据** | Post数量、涨粉数、曝光量、发布频次、高互动内容 | Instagram/TikTok/YouTube/Facebook API |
-| **红人合作** | 红人数量、曝光、量级、类型、推广产品、高互动视频 | 社媒公开帖子识别 |
-| **UGC舆情** | Reddit讨论、用户反馈、评论区舆情 | Reddit API、社媒评论抓取 |
-| **PR稿件** | PR篇数、媒体、量级、内容方向、推广重点 | Google News API、新闻监测工具 |
-| **Meta广告** | 广告条数、新广告、素材文案、主推产品 | Meta Ad Library + Apify爬虫 |
+### 1.2 监测维度与数据源
 
-### 1.2 报告周期
+| 板块 | 监测内容 | 数据源 | Apify Actor / API |
+|------|---------|--------|-------------------|
+| **品牌新品动向** | 新品上线时间、主推卖点、近期主推产品 | 品牌官网+社媒 | 官网fetch + IG Posts分析 |
+| **社媒数据** | Post数量、涨粉数、曝光量、发布频次、高互动内容 | IG/TK/YT/FB | `apify/instagram-profile-scraper` + `apify/instagram-post-scraper` + `apify/tiktok-profile-scraper` + `streamers/youtube-scraper` |
+| **红人合作** | 红人数量、曝光、量级、类型、推广产品、高互动视频 | IG Tagged区 | `scrapio/instagram-tagged-mentions-posts-scraper` + TK profile分析 |
+| **UGC舆情** | Reddit讨论、用户反馈、评论区舆情 | Reddit+社媒评论 | 搜索引擎检索Reddit帖文 + `apify/instagram-comment-scraper` |
+| **PR稿件** | PR篇数、媒体、量级、内容方向、推广重点 | 新闻搜索 | 搜索引擎检索PR新闻 |
+| **Meta广告** | 广告条数、新广告、素材文案、主推产品 | Meta Ad Library | `automation-lab/facebook-ads-library` |
 
+### 1.3 报告周期
 - **监测周期**: 上月1日至上月最后一日
 - **报告时间**: 每月1日生成并输出
-- **输出格式**: 飞书云文档
+- **输出格式**: 飞书云文档 / Markdown
 
 ---
 
@@ -34,225 +38,198 @@ description: 竞品全维度监测Skill，支持品牌新品动向、社媒数�
 执行本Skill前，需要收集以下信息：
 
 ### 2.1 基础配置
-
 ```yaml
 monitoring_config:
-  report_period: "YYYY-MM"          # 报告周期，如 "2025-05"
+  report_period: "YYYY-MM"          # 报告周期，如 "2026-05"
   output_format: "lark_doc"         # 输出格式：飞书文档
-  
+  language: "zh"                    # 报告语言
+
 brands:                             # 监测品牌列表（最多5个）
   - name: "品牌A"                   # 品牌名称
     website: "https://brand-a.com"  # 官网
-    social_accounts:                # 社媒账号
-      instagram: "@brand_a"
-      tiktok: "@brand_a"
-      facebook: "brand.a.official"
-      youtube: "@BrandAOfficial"
-    product_keywords:               # 产品关键词
-      - "Product X"
-      - "Product Y"
-    
+    social_accounts:
+      instagram: "brand_a"          # 不含@
+      tiktok: "brand_a"             # 不含@
+      facebook: "brand.a.official"  # Facebook Page名或URL
+      youtube: "@BrandAOfficial"    # YouTube频道
+    product_keywords:
+      - "BrandA Product X"
+      - "BrandA Pro"
+    facebook_page_url: "https://www.facebook.com/branda/"  # 用于Meta广告按Page抓取
+
   - name: "品牌B"
     # ... 同上
 ```
 
 ### 2.2 API 配置
-
 ```yaml
 api_config:
-  # Meta Ad Library (通过 Apify)
+  # Apify（核心，已有Token）
   apify:
-    api_token: "${APIFY_API_TOKEN}"
-    actor: "apify/facebook-ads-library-scraper"
+    api_token: "${APIFY_API_TOKEN}"   # 读取方式: os.getenv("APIFY_API_TOKEN")
   
-  # 社媒数据 API (建议：Social Blade / HypeAuditor / Sprout Social / 类似海外服务)
-  social_media:
-    provider: "Social Blade"        # 或其他第三方海外数据服务商
-    api_key: "${SOCIAL_MEDIA_API_KEY}"
-    endpoints:
-      instagram: "https://api.example.com/instagram"
-      tiktok: "https://api.example.com/tiktok"
-      youtube: "https://api.example.com/youtube"
-      facebook: "https://api.example.com/facebook"
-  
-  # Reddit 数据
-  reddit:
-    client_id: "${REDDIT_CLIENT_ID}"
-    client_secret: "${REDDIT_CLIENT_SECRET}"
-    user_agent: "CompetitorMonitor/1.0"
-  
-  # PR/新闻监测
-  pr_monitoring:
-    provider: "Google News API"      # 或 Meltwater/Cision
-    api_key: "${NEWS_API_KEY}"
-  
-  # 飞书输出
-  lark:
-    app_id: "${LARK_APP_ID}"
-    app_secret: "${LARK_APP_SECRET}"
-    target_folder: "竞品监测报告"     # 飞书云空间文件夹
+  # 以下均通过搜索引擎替代，无需额外API Key
+  # Reddit舆情 → 搜索引擎检索 "site:reddit.com 品牌名"
+  # PR稿件   → 搜索引擎检索 "品牌名 press release / news"
 ```
+
+### 2.3 Apify Actor 清单
+
+| Actor ID | 用途 | 单价(Starter) |
+|----------|------|--------------|
+| `apify/instagram-profile-scraper` | IG账号信息+粉丝数 | $1.60/1k profiles |
+| `apify/instagram-post-scraper` | IG帖子详情+评论 | $1.00/1k posts |
+| `scrapio/instagram-tagged-mentions-posts-scraper` | IG Tagged区帖子(红人识别) | $14.99/月 |
+| `apify/tiktok-profile-scraper` | TK账号信息+帖子 | 按量 |
+| `streamers/youtube-scraper` | YT频道视频搜索 | $2.40/1k videos |
+| `automation-lab/facebook-ads-library` | Meta广告库 | $0.0005/ad |
+| `apify/instagram-comment-scraper` | IG评论(舆情) | 按量 |
+
+**月度成本估算(1品牌)**:
+- IG Profile + Posts: ~$0.5
+- IG Tagged: ~$14.99/月(固定)
+- TK Profile: ~$0.5
+- YT Scraper: ~$0.3
+- Meta Ads: ~$0.05
+- **合计: ~$16-20/品牌/月**（含搜索降级方案则更低）
 
 ---
 
 ## 3. 执行流程
 
 ### 3.1 主流程
-
-```mermaid
-flowchart TD
-    A[开始] --> B[收集品牌配置]
-    B --> C[执行六大板块数据采集]
-    C --> D[数据清洗与整合]
-    D --> E[生成各板块分析报告]
-    E --> F[生成执行摘要]
-    F --> G[创建飞书文档]
-    G --> H[写入报告内容]
-    H --> I[完成]
+```
+1. 读取config → 确认品牌列表、社媒账号、报告周期
+2. 依次执行6大板块数据采集（每品牌）
+   ├── 板块1: 品牌新品动向（官网fetch + IG帖子新品识别）
+   ├── 板块2: 社媒数据（IG/TK/YT三平台profile+posts）
+   ├── 板块3: 红人合作（IG Tagged区 + TK合作视频识别）
+   ├── 板块4: UGC舆情（搜索Reddit + IG评论区）
+   ├── 板块5: PR稿件（搜索引擎检索新闻）
+   └── 板块6: Meta广告（Apify Actor抓取Ad Library）
+3. LLM深度分析
+   ├── 内容方向分类（product review/sponsorship/campaign/giveaway）
+   ├── 情感分析（Reddit+评论区）
+   ├── 卖点提取（从文案和广告中）
+   └── 视频脚本拆解（高互动视频）
+4. 数据整合 → 生成报告
+5. 输出至飞书文档
 ```
 
-### 3.2 数据采集流程
+### 3.2 数据采集详细流程
 
 #### 板块1: 品牌新品动向
-```python
-def collect_brand_new_products(brand_config, period):
-    """
-    采集品牌新品动向
-    
-    数据源:
-    1. 品牌官网 - 抓取 /new-arrivals, /products 页面
-    2. 官方社媒 - 识别新品发布帖子
-    
-    输出:
-    - 新品列表: [{name, launch_date, main_selling_point, price}]
-    - 主推产品: {name, main_selling_point, promotion_focus}
-    """
-    pass
+```
+数据源:
+1. 品牌官网 → fetch /products, /new-arrivals 页面
+2. IG帖子 → 识别含"new launch"/"new product"/"just dropped"等关键词的帖子
+
+输出:
+- new_products: [{name, launch_date, main_selling_point, price, source_url}]
+- main_products: [{name, main_selling_point, promotion_focus}]
 ```
 
 #### 板块2: 社媒数据
-```python
-def collect_social_media_data(brand_config, period, api_config):
-    """
-    采集社媒数据
-    
-    API: 第三方社媒数据服务 (如极致了数据)
-    
-    采集维度:
-    - 各平台 Post 数量
-    - 全平台涨粉数 & 分平台涨粉数
-    - 总曝光量 & 分平台曝光量
-    - 发布频次
-    - 高曝光/高互动帖文列表
-    
-    内容分析:
-    - 推广内容方向 (product review / brand sponsorship / campaign / giveaway)
-    - 核心宣传卖点
-    
-    输出:
-    - dashboard_data: 核心指标汇总
-    - posts_data: 帖文明细
-    - content_analysis: 内容方向分析
-    """
-    pass
+```
+数据采集步骤:
+1. Apify: instagram-profile-scraper → 获取粉丝数、bio、帖子数
+2. Apify: instagram-post-scraper → 获取最近30-60条帖子详情
+3. Apify: tiktok-profile-scraper → 获取TK账号信息+帖子
+4. Apify: streamers/youtube-scraper → 搜索品牌频道视频
+
+数据维度:
+- 各平台 Post 数量（按月筛选）
+- 粉丝数快照（当前值，如需环比需存历史）
+- 各平台 高曝光/高互动帖文 Top 10
+- 发布频次（总帖子数/天数）
+- 内容类型分布（视频/图片/Carousel占比）
+
+LLM分析:
+- 内容方向分类: 将每条帖子分为 product_review / brand_sponsorship / campaign / giveaway / educational / other
+- 核心宣传卖点提取: 从caption中提取主推卖点
 ```
 
 #### 板块3: 红人合作
-```python
-def collect_influencer_data(brand_config, period):
-    """
-    采集红人合作数据
-    
-    方法: 从社媒公开帖子中识别品牌合作内容
-    - 识别含品牌标签/提及的帖子
-    - 判断是否为付费合作 (#ad, #sponsored, paid partnership)
-    
-    采集维度:
-    - 红人总数量、总曝光
-    - 平台分布
-    - 红人量级 (nano/micro/macro/mega)
-    - 红人类型 (lifestyle/tech/beauty/etc.)
-    - 推广产品 & 强调卖点
-    - 高互动/高曝光视频列表
-    
-    输出:
-    - influencer_list: [{name, platform, followers, tier, type, product, views, engagement}]
-    - top_performing_content: 高互动内容列表
-    - script_analysis: 脚本结构拆解
-    """
-    pass
+```
+关键修正: 看品牌官方账号的"tag区"（别人tag了品牌的帖子），不是品牌@mention的人
+
+数据采集步骤:
+1. Apify: scrapio/instagram-tagged-mentions-posts-scraper
+   - 输入品牌IG username
+   - 输出: 别人tag了该品牌的帖子列表，含帖子owner信息
+2. 从tagged帖子的owner中识别红人
+   - 提取owner的username, followers, bio
+   - 判断is_paid_partnership / is_ad
+3. 交叉验证TK平台红人合作
+
+数据维度:
+- 红人总数量、总曝光（粉丝数之和）
+- 平台分布（IG/TK）
+- 红人量级: Nano(<1K) / Micro(1K-100K) / Macro(100K-1M) / Mega(>1M)
+- 红人类型: lifestyle/pet/health/vet/other（LLM从bio分类）
+- 推广产品 & 强调卖点（LLM从caption提取）
+- 高互动/高曝光视频列表
+- 脚本结构拆解（LLM分析top视频caption+comment）
 ```
 
 #### 板块4: UGC舆情
-```python
-def collect_ugc_sentiment(brand_config, period, api_config):
-    """
-    采集UGC舆情数据
-    
-    API: Reddit API + 社媒评论抓取
-    
-    Reddit监测:
-    - 检索品牌/产品关键词
-    - 分析用户讨论内容、反馈、舆情
-    - 整体评价汇总
-    
-    社媒评论区:
-    - 监测品牌社媒帖子评论区
-    - 分析用户对推广的反馈
-    
-    输出:
-    - reddit_discussions: [{subreddit, title, sentiment, key_points}]
-    - comment_sentiment: 评论区情感分析
-    - overall_sentiment: 整体舆情总结
-    """
-    pass
+```
+数据采集步骤:
+1. 搜索引擎: "site:reddit.com 品牌名 OR 产品名"
+   - 提取相关帖子标题、链接、摘要
+2. Apify: instagram-comment-scraper (可选)
+   - 抓取品牌高互动帖子下的评论
+
+LLM分析:
+- Reddit帖子情感分类: positive/neutral/negative
+- 评论区情感分析: 对推广活动的反馈
+- 整体舆情总结
+- 关键投诉/好评提取
+
+输出:
+- reddit_discussions: [{title, url, sentiment, key_points, subreddit}]
+- comment_sentiment: {positive_rate, neutral_rate, negative_rate}
+- overall_sentiment: 整体舆情总结
 ```
 
 #### 板块5: PR稿件
-```python
-def collect_pr_data(brand_config, period, api_config):
-    """
-    采集PR稿件数据
-    
-    API: Google News API / 新闻监测服务
-    
-    采集维度:
-    - PR稿件篇数
-    - 上线媒体列表
-    - 媒体量级 (tier1/tier2/tier3)
-    - 媒体类型 (科技/生活/财经/垂直)
-    - PR内容方向
-    - 推广重点 (促销/新品/横测等)
-    - 新闻稿突出信息
-    
-    输出:
-    - pr_articles: [{title, media, media_tier, media_type, publish_date, focus}]
-    - pr_summary: PR推广重点总结
-    """
-    pass
+```
+数据采集步骤:
+1. 搜索引擎: "品牌名 press release" / "品牌名 news" / "品牌名 announces"
+   - 按日期筛选上月结果
+2. 如有Google CSE API Key则用API，否则用搜索
+
+LLM分析:
+- 媒体量级分类: Tier1(Top媒体) / Tier2(知名媒体) / Tier3(垂直/小众)
+- 媒体类型: 科技/生活/财经/垂直/宠物
+- 推广重点: 促销/新品/横测/融资/合作
+- PR突出信息提取
+
+输出:
+- pr_articles: [{title, url, media, media_tier, media_type, publish_date, focus, key_info}]
+- pr_summary: PR推广重点总结
 ```
 
 #### 板块6: Meta广告
-```python
-def collect_meta_ads_data(brand_config, period, api_config):
-    """
-    采集Meta广告数据
-    
-    API: Meta Ad Library + Apify爬虫
-    
-    采集维度:
-    - 广告总条数
-    - 新上线广告数量
-    - 广告素材分析 (图片/视频/文案)
-    - 当月主推产品
-    - 视频脚本分析
-    
-    输出:
-    - ads_overview: {total_ads, new_ads, main_products}
-    - ads_details: [{ad_id, creative_type, copy, targeting, spend}]
-    - script_analysis: 视频脚本结构分析
-    """
-    pass
+```
+数据采集步骤:
+1. Apify: automation-lab/facebook-ads-library
+   - 输入: searchQueries=[品牌名, 产品名] 或 pageUrls=[品牌FB页面URL]
+   - 输出: 广告详情含文案、图片、视频、投放平台、spend估算
+
+数据维度:
+- 广告总条数
+- 新上线广告（本月startDate的）
+- 广告素材类型分布（image/video/carousel）
+- 投放平台分布（FB/IG/Messenger）
+- 主推产品（LLM从bodyText提取）
+- 文案分析（CTA类型、卖点关键词）
+- 视频脚本分析（LLM拆解视频广告脚本结构）
+
+输出:
+- ads_overview: {total_ads, new_ads, main_products, creative_type_dist, platform_dist}
+- ads_details: [{adArchiveId, bodyText, title, ctaText, displayFormat, imageUrls, videoUrls, platforms, startDate, spend}]
+- script_analysis: 视频广告脚本拆解
 ```
 
 ---
@@ -260,356 +237,206 @@ def collect_meta_ads_data(brand_config, period, api_config):
 ## 4. 报告结构
 
 ### 4.1 报告大纲
-
 ```
-📊 竞品监测报告 - [品牌名称] - [月份]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 执行摘要
+📊 竞品监测报告 - [品牌名称] - [YYYY年MM月]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 执行摘要（LLM生成）
    ├── 监测周期
-   ├── 核心推广动作总结
+   ├── 核心推广动作总结（2-3句）
    ├── 推广方向概括
    ├── 主推产品总结
-   └── 关键发现
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+   └── 关键发现 Top 5
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📱 板块概览 Dashboard
-   ├── 品牌新品动向 📦
-   ├── 社媒数据表现 📊
-   ├── 红人合作数据 👥
-   ├── UGC舆情监测 💬
-   ├── PR稿件监测 📰
-   └── Meta广告监测 🎯
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📦 1. 品牌新品动向 (展开详情)
-   ├── 板块总结
-   ├── 新品上线列表
-   ├── 新品详情 (时间/卖点/价格)
+   | 板块 | 核心指标1 | 核心指标2 | 核心指标3 |
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 1. 品牌新品动向
+   > 板块总结（LLM生成，3句以内）
+   ├── 新品上线列表（表格）
    └── 主推产品分析
 
-📊 2. 社媒数据表现 (展开详情)
-   ├── 板块总结
-   ├── 核心数据 Dashboard
-   │   ├── 各平台 Post 数量
-   │   ├── 涨粉数据 (总/分平台)
-   │   ├── 曝光数据 (总/分平台)
-   │   └── 发布频次
-   ├── 高曝光/高互动帖文 Top 10
-   └── 内容方向分析
+📊 2. 社媒数据表现
+   > 板块总结（LLM生成）
+   ├── 核心数据 Dashboard（表格）
+   │   | 平台 | 粉丝数 | 本月Post数 | 平均互动 | 发布频次 |
+   ├── 高曝光/高互动帖文 Top 10（每平台）
+   └── 内容方向分析（LLM分类结果）
 
-👥 3. 红人合作数据 (展开详情)
-   ├── 板块总结
+👥 3. 红人合作数据
+   > 板块总结（LLM生成）
    ├── 核心数据 Dashboard
-   │   ├── 红人总数量
-   │   ├── 总曝光量
-   │   ├── 平台分布
-   │   ├── 量级分布
-   │   └── 类型分布
-   ├── 红人明细列表
+   │   | 红人总数 | 总曝光 | 平台分布 | 量级分布 |
+   ├── 红人明细列表（表格）
+   │   | 红人账号 | 平台 | 粉丝数 | 量级 | 类型 | 推广产品 | 合作帖子链接 |
    ├── 推广产品 & 卖点分析
-   └── 高互动视频分析 + 脚本拆解
+   └── 高互动视频 + 脚本拆解（LLM）
 
-💬 4. UGC舆情监测 (展开详情)
-   ├── 板块总结
-   ├── Reddit 讨论概览
-   ├── 热门讨论主题
-   ├── 用户反馈汇总
-   ├── 整体舆情评价
+💬 4. UGC舆情监测
+   > 板块总结（LLM生成）
+   ├── Reddit 讨论概览（表格）
+   ├── 情感分布（正面/中性/负面占比）
+   ├── 热门讨论帖子（含链接）
    └── 社媒评论区舆情
 
-📰 5. PR稿件监测 (展开详情)
-   ├── 板块总结
+📰 5. PR稿件监测
+   > 板块总结（LLM生成）
    ├── 核心数据 Dashboard
-   │   ├── PR篇数
-   │   ├── 媒体分布
-   │   └── 媒体量级分布
-   ├── PR稿件列表
-   ├── 媒体详情
+   ├── 媒体分布（层级+类型）
+   ├── PR稿件列表（含链接）
    └── 推广重点分析
 
-🎯 6. Meta广告监测 (展开详情)
-   ├── 板块总结
+🎯 6. Meta广告监测
+   > 板块总结（LLM生成）
    ├── 核心数据 Dashboard
-   │   ├── 广告总条数
-   │   ├── 新广告数量
-   │   └── 主推产品
-   ├── 广告素材分析
-   ├── 文案分析
-   └── 视频脚本分析
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+   ├── 广告素材分析（类型+平台分布）
+   ├── 文案 & CTA分析
+   └── 视频脚本分析（LLM拆解）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 附录
-   ├── 数据来源说明
-   ├── 监测方法论
+   ├── 数据来源说明（每个板块标注Actor/API）
+   ├── 成本明细（本次run消耗）
    └── 数据限制声明
 ```
 
-### 4.2 飞书文档格式规范
-
+### 4.2 报告格式规范
 ```markdown
-# 文档标题格式
-标题: 📊 竞品监测报告 - {品牌名称} - {YYYY年MM月}
+# 标题格式
+📊 竞品监测报告 - {品牌名称} - {YYYY年MM月}
 
-# 板块标题格式
+# 板块标题
 ## 📦 1. 品牌新品动向
 
-# 板块总结格式
-> **板块总结**: 
-> - 核心发现1
-> - 核心发现2
-> - 核心发现3
+# 板块总结（LLM生成，3句以内）
+> **板块总结**: 本月品牌上线2款新品，主推Allergy产品线，核心卖点集中在...
 
-# Dashboard 表格格式
+# Dashboard 表格
 | 指标 | 数值 | 环比变化 |
-|-----|------|---------|
-| 总Post数 | 45 | +12% |
 
-# 高亮框格式
+# 关键洞察框
 :::info
-**关键洞察**: 本月主推方向为...
+**关键洞察**: ...
 :::
 ```
 
 ---
 
-## 5. API 与工具清单
+## 5. LLM 分析逻辑
 
-### 5.1 推荐API服务商
+本Skill利用Coze内置LLM做深度分析，替代传统的关键词匹配方式。
 
-| 板块 | 推荐API/工具 | 功能覆盖 | 基础套餐参考 |
-|------|-------------|---------|-------------|
-| **社媒数据** | Social Blade / HypeAuditor / Sprout Social | IG/TK/FB/YT 全平台 | 基础版 |
-| **社媒数据** | Social Blade | 粉丝增长追踪 | 基础版 |
-| **社媒数据** | HypeAuditor | 红人数据 | 基础版 |
-| **Meta广告** | Apify + Meta Ad Library | 广告库抓取 | 基础版 |
-| **Reddit** | Reddit API (PRAW) | 帖子/评论抓取 | 免费额度 |
-| **PR监测** | Google News API | 新闻检索 | 免费额度 |
-| **PR监测** | Meltwater/Cision | 专业PR监测 | 基础版 |
+### 5.1 内容方向分类
+```
+Prompt: 
+分析以下社媒帖子的内容方向，将其分为以下类别之一：
+- product_review: 产品评测/使用体验
+- brand_sponsorship: 品牌赞助/付费合作
+- campaign: 节日活动/campaign
+- giveaway: 赠品/抽奖
+- educational: 教育/科普内容
+- ugc: 用户生成内容
+- other: 其他
 
-### 5.2 Apify Meta Ad Library 配置
-
-```javascript
-// Apify Actor 配置示例
-{
-  "searchTerms": ["品牌名", "产品名"],
-  "advertiserIds": [],
-  "adType": "ALL",
-  "timeRange": "LAST_30_DAYS",
-  "country": "US",
-  "platform": ["FACEBOOK", "INSTAGRAM"],
-  "maxResults": 1000
-}
+帖子内容: {caption}
+回复格式: {"category": "xxx", "confidence": 0.9, "reason": "xxx"}
 ```
 
-### 第三方社媒数据API调用示例
+### 5.2 情感分析
+```
+Prompt:
+分析以下用户评论/讨论的情感倾向：
+- positive: 正面/推荐
+- neutral: 中性/客观
+- negative: 负面/批评
 
-```python
-# 第三方海外社媒数据 API 调用示例 (如 Social Blade / HypeAuditor / 类似服务)
-def fetch_social_data(brand_account, platform, start_date, end_date):
-    """
-    获取社媒账号数据
-    
-    Endpoint: POST /api/v1/social/account/data
-    
-    Parameters:
-    - account: 账号标识
-    - platform: instagram/tiktok/youtube/facebook
-    - start_date: 开始日期 (YYYY-MM-DD)
-    - end_date: 结束日期 (YYYY-MM-DD)
-    - metrics: 需要的数据指标列表
-    
-    Returns:
-    - posts_count: Post数量
-    - followers_growth: 涨粉数
-    - impressions: 曝光量
-    - engagement_rate: 互动率
-    - top_posts: 高互动帖文列表
-    """
-    pass
+内容: {text}
+回复格式: {"sentiment": "xxx", "confidence": 0.9, "key_points": ["..."]}
+```
+
+### 5.3 卖点提取
+```
+Prompt:
+从以下广告/帖子文案中提取核心卖点，按重要性排序：
+文案: {text}
+产品类别: {category}
+回复格式: {"selling_points": ["卖点1", "卖点2"], "main_product": "xxx", "promotion_type": "xxx"}
+```
+
+### 5.4 视频脚本拆解
+```
+Prompt:
+拆解以下视频广告的脚本结构，分析其营销策略：
+视频文案: {caption}
+视频类型: {type}
+互动数据: likes={likes}, views={views}
+
+回复格式:
+{
+  "hook": "开头hook（前3秒）",
+  "problem": "痛点描述",
+  "solution": "产品解决方案",
+  "proof": "信任背书（成分/数据/评价）",
+  "cta": "行动号召",
+  "strategy": "整体策略分析"
+}
 ```
 
 ---
 
-## 6. 数据质量与准确性保障
+## 6. 降级策略
 
-### 6.1 数据验证机制
+当Apify积分不足或Actor不可用时，采用搜索降级模式：
 
+| 板块 | 正常模式(Apify) | 降级模式(搜索) |
+|------|---------------|--------------|
+| IG社媒 | Apify Actor直采 | 搜索 "品牌名 site:instagram.com" |
+| TK社媒 | Apify Actor直采 | 搜索 "品牌名 site:tiktok.com" |
+| YT社媒 | Apify Actor直采 | 搜索 "品牌名 site:youtube.com" |
+| IG红人 | Tagged Posts Actor | 搜索 "品牌名 influencer" / "品牌名 sponsored" |
+| Reddit | 搜索reddit帖文 | 同（已是搜索模式） |
+| PR | 搜索新闻 | 同（已是搜索模式） |
+| Meta广告 | Apify Ad Library | 搜索 "品牌名 site:facebook.com/ads" |
+
+降级模式数据精度降低，但可保证报告不中断。
+
+---
+
+## 7. 数据质量保障
+
+### 7.1 数据验证
 ```python
-def validate_data_quality(raw_data):
+def validate_data(raw_data):
     """
-    数据质量验证
-    
     验证项:
-    1. 完整性检查 - 关键字段是否缺失
-    2. 一致性检查 - 跨平台数据是否矛盾
-    3. 合理性检查 - 数值是否在合理范围
-    4. 时效性检查 - 数据是否在监测周期内
-    
-    输出:
-    - validation_report: 验证报告
-    - confidence_score: 数据可信度评分
+    1. 完整性 - 关键字段是否缺失
+    2. 时效性 - 数据是否在监测周期内
+    3. 合理性 - 数值是否在合理范围
+    4. 去重 - 跨Actor结果去重
     """
     pass
 ```
 
-### 6.2 数据异常处理
-
+### 7.2 异常处理
 | 异常情况 | 处理策略 |
 |---------|---------|
-| API限流 | 指数退避重试 + 降级方案 |
-| 数据缺失 | 标记为N/A + 说明原因 |
-| 数据矛盾 | 多源交叉验证 + 置信度标注 |
-| 抓取失败 | 人工介入提醒 |
+| Apify积分不足 | 自动切换搜索降级模式 |
+| Actor超时/失败 | 重试1次→降级→标记N/A |
+| 搜索无结果 | 标记"暂无数据"+说明原因 |
+| Actor返回空数据 | 可能是无内容，标记确认 |
 
 ---
 
-## 7. 扩展监测维度（可选）
+## 8. 扩展监测维度（可选）
 
-以下维度可根据需求补充：
-
-| 维度 | 监测内容 | 数据源 |
-|------|---------|--------|
-| **SEO/搜索趋势** | 品牌搜索量、关键词排名 | Google Trends API |
-| **电商数据** | 产品评分、评论数、销量趋势 | Amazon API / 爬虫 |
-| **网站流量** | 访问量、流量来源 | SimilarWeb API |
-| **App数据** | 下载量、评分、评论 | App Annie / Sensor Tower |
-| **邮件营销** | 邮件内容、发送频次 | 品牌官网订阅 |
-| **线下活动** | 展会、快闪店、发布会 | 新闻监测 |
+| 维度 | 监测内容 | 数据源 | 增量成本 |
+|------|---------|--------|---------|
+| **Amazon评论** | 产品评分、评论趋势 | Apify Amazon scraper | ~$1/品牌 |
+| **Google Trends** | 品牌搜索热度趋势 | Google Trends(免费) | $0 |
+| **TikTok创意趋势** | 赛道热门创意形式 | Apify TikTok scraper | ~$0.5 |
+| **联盟营销** | Affiliate推广活动 | 搜索 "品牌名 affiliate" | $0 |
 
 ---
 
-## 8. 执行函数定义
+## 9. 版本记录
 
-### 8.1 主执行函数
-
-```python
-def run_competitor_monitoring(config):
-    """
-    执行竞品监测全流程
-    
-    参数:
-    - config: 完整配置对象 (品牌配置 + API配置)
-    
-    返回:
-    - report_url: 飞书文档链接
-    - execution_log: 执行日志
-    """
-    # 1. 数据收集
-    data = collect_all_data(config)
-    
-    # 2. 数据验证
-    validated_data = validate_data_quality(data)
-    
-    # 3. 生成分析报告
-    analysis = generate_analysis(validated_data)
-    
-    # 4. 创建飞书文档
-    doc_url = create_lark_document(analysis, config)
-    
-    return doc_url
-```
-
-### 8.2 数据收集函数
-
-```python
-def collect_all_data(config):
-    """收集所有板块数据"""
-    data = {
-        'brand_products': [],
-        'social_media': [],
-        'influencers': [],
-        'ugc_sentiment': [],
-        'pr_articles': [],
-        'meta_ads': []
-    }
-    
-    for brand in config['brands']:
-        # 并行收集各品牌数据
-        data['brand_products'].append(collect_brand_new_products(brand, config['period']))
-        data['social_media'].append(collect_social_media_data(brand, config['period'], config['api_config']))
-        data['influencers'].append(collect_influencer_data(brand, config['period']))
-        data['ugc_sentiment'].append(collect_ugc_sentiment(brand, config['period'], config['api_config']))
-        data['pr_articles'].append(collect_pr_data(brand, config['period'], config['api_config']))
-        data['meta_ads'].append(collect_meta_ads_data(brand, config['period'], config['api_config']))
-    
-    return data
-```
-
-### 8.3 报告生成函数
-
-```python
-def generate_analysis(data):
-    """生成分析报告"""
-    analysis = {
-        'executive_summary': generate_executive_summary(data),
-        'brand_products': analyze_brand_products(data['brand_products']),
-        'social_media': analyze_social_media(data['social_media']),
-        'influencers': analyze_influencers(data['influencers']),
-        'ugc_sentiment': analyze_ugc_sentiment(data['ugc_sentiment']),
-        'pr_articles': analyze_pr_data(data['pr_articles']),
-        'meta_ads': analyze_meta_ads(data['meta_ads'])
-    }
-    return analysis
-
-def create_lark_document(analysis, config):
-    """创建飞书文档"""
-    # 使用 lark-doc skill 创建文档
-    pass
-```
-
----
-
-## 9. 使用示例
-
-### 9.1 完整调用示例
-
-```python
-# 配置
-config = {
-    "report_period": "2025-05",
-    "brands": [
-        {
-            "name": "BrandA",
-            "website": "https://branda.com",
-            "social_accounts": {
-                "instagram": "@branda",
-                "tiktok": "@branda",
-                "facebook": "branda.official",
-                "youtube": "@BrandA"
-            },
-            "product_keywords": ["Product X", "Product Y"]
-        }
-    ],
-    "api_config": {
-        "apify": {"api_token": "xxx"},
-        "social_media": {"api_key": "xxx"},
-        "reddit": {"client_id": "xxx", "client_secret": "xxx"},
-        "lark": {"app_id": "xxx", "app_secret": "xxx"}
-    }
-}
-
-# 执行
-report_url = run_competitor_monitoring(config)
-print(f"报告已生成: {report_url}")
-```
-
----
-
-## 10. 注意事项
-
-1. **API配额管理**: 注意各API的调用限制，合理安排采集频率
-2. **数据隐私**: 遵守各平台的数据使用政策和隐私法规
-3. **数据时效性**: 社媒数据变化快，建议采集后尽快生成报告
-4. **异常处理**: 当某个API不可用时，应有降级方案
-5. **报告更新**: 如需更新报告，建议重新执行完整流程
-
----
-
-## 11. 版本记录
-
-- **v1.0** - 初始版本，覆盖6大监测板块，支持飞书文档输出
+- **v2.0** - 全面重构：数据源切换为Apify真实爬虫+搜索架构；修复IG _sharedData失效问题；修复Meta Ad Library需access_token问题；修复红人识别逻辑(改为tag区识别)；新增TikTok/YouTube平台覆盖；新增LLM深度分析；新增降级策略
+- **v1.0** - 初始版本，覆盖6大监测板块
